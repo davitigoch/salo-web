@@ -44,4 +44,9 @@ http://localhost:3000/book/your-salon-slug
 
 ## Deploy
 
-Deploy to Vercel and add the same `NEXT_PUBLIC_*` environment variables in the project settings.
+See **[DEPLOYMENT.md](./DEPLOYMENT.md)** for step-by-step Vercel instructions:
+
+1. Push to GitHub
+2. Create Vercel project
+3. Set `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+4. Deploy and verify `/book/davitgochiashvili-d11351`
