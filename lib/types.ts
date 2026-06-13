@@ -6,6 +6,11 @@ export type PublicBusiness = {
   description: string | null;
   timezone: string;
   public_booking_enabled: boolean;
+  stripe_account_id: string | null;
+  stripe_charges_enabled: boolean;
+  deposits_enabled: boolean;
+  deposit_percentage: number | null;
+  require_card_on_booking: boolean;
 };
 
 export type PublicService = {

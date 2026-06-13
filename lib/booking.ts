@@ -1,10 +1,11 @@
 import { createSupabaseClient } from '@/lib/supabase';
+import { normalizePublicBookingSlug } from '@/lib/bookingSlug';
 import type { PublicBookingPageData, PublicBusiness, PublicService } from '@/lib/types';
 
 export async function fetchPublicBookingPage(
   slug: string
 ): Promise<{ data: PublicBookingPageData | null; error: string | null }> {
-  const normalizedSlug = slug.trim();
+  const normalizedSlug = normalizePublicBookingSlug(slug);
 
   if (!normalizedSlug) {
     return { data: null, error: 'Missing business link.' };
@@ -15,7 +16,7 @@ export async function fetchPublicBookingPage(
   const { data: business, error: businessError } = await supabase
     .from('businesses')
     .select(
-      'id, owner_user_id, business_name, slug, description, timezone, public_booking_enabled'
+      'id, owner_user_id, business_name, slug, description, timezone, public_booking_enabled, stripe_account_id, stripe_charges_enabled, deposits_enabled, deposit_percentage, require_card_on_booking'
     )
     .eq('slug', normalizedSlug)
     .eq('public_booking_enabled', true)

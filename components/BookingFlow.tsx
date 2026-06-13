@@ -7,7 +7,21 @@ import {
   generateAvailableTimeSlots,
   type ExistingBookingSlot,
 } from '@/lib/bookingSlots';
+import { getEdgeFunctionErrorMessage } from '@/lib/edgeFunctions';
+import {
+  fetchPublicBookingPaymentSettings,
+  mergePublicBookingPaymentSettings,
+} from '@/lib/publicBookingPayment';
+import {
+  savePendingPublicBookingDraft,
+  type PendingPublicBookingDraft,
+} from '@/lib/publicBookingDraft';
 import { createBrowserSupabaseClient } from '@/lib/supabase/client';
+import {
+  isPublicBookingPaymentRequired,
+  isPublicBookingStripeReady,
+  logPublicBookingPaymentSettings,
+} from '@/lib/stripePayments';
 import type {
   BookingConfirmation,
   PublicBookedSlot,
@@ -75,6 +89,10 @@ export default function BookingFlow({ business, services, servicesError }: Booki
     () => staffMembers.find((member) => member.id === selectedStaffId) || null,
     [staffMembers, selectedStaffId]
   );
+
+  useEffect(() => {
+    logPublicBookingPaymentSettings(business);
+  }, [business]);
 
   useEffect(() => {
     const today = getTodayDateInputValue();
@@ -287,35 +305,115 @@ export default function BookingFlow({ business, services, servicesError }: Booki
       },
     };
 
+    logPublicBookingPaymentSettings(business);
+
     const supabase = createBrowserSupabaseClient();
-    const { error } = await supabase.from('bookings').insert(payload);
+    const freshPaymentSettings = await fetchPublicBookingPaymentSettings(business.id);
+    const businessForPayment = mergePublicBookingPaymentSettings(business, freshPaymentSettings);
 
-    setIsSubmitting(false);
+    logPublicBookingPaymentSettings(businessForPayment);
 
-    if (error) {
-      setSubmitError(error.message || 'Booking failed. Please try again.');
+    const isPaymentRequired = isPublicBookingPaymentRequired(businessForPayment);
+    const isStripeReady = isPublicBookingStripeReady(businessForPayment);
+
+    console.log('[SALO] payment required', isPaymentRequired);
+    console.log('[SALO] stripe ready', isStripeReady);
+
+    if (!isPaymentRequired) {
+      const { error } = await supabase.from('bookings').insert(payload);
+
+      setIsSubmitting(false);
+
+      if (error) {
+        setSubmitError(error.message || 'Booking failed. Please try again.');
+        return;
+      }
+
+      setConfirmation({
+        clientName: clientName.trim(),
+        serviceName: selectedService.name,
+        date: selectedDate,
+        time: selectedSlotTime,
+        staffName: selectedStaff?.name || null,
+      });
+
+      setBookedSlots((previous) => [
+        ...previous,
+        {
+          id: `local-${Date.now()}`,
+          time: selectedSlotTime,
+          staff_member_id: selectedStaff?.id || null,
+          booking_metadata: {
+            service_duration_minutes: selectedService.duration_minutes,
+          },
+        },
+      ]);
       return;
     }
 
-    setConfirmation({
-      clientName: clientName.trim(),
-      serviceName: selectedService.name,
+    if (!isStripeReady) {
+      setIsSubmitting(false);
+      setSubmitError('This salon has not finished payment setup.');
+      return;
+    }
+
+    const origin = window.location.origin;
+    const successUrl = `${origin}/book/${business.slug}/payment?status=success&session_id={CHECKOUT_SESSION_ID}`;
+    const cancelUrl = `${origin}/book/${business.slug}/payment?status=cancel`;
+
+    console.log('[SALO] creating checkout session');
+
+    const { data: checkoutData, error: checkoutError } = await supabase.functions.invoke(
+      'create-stripe-checkout-session',
+      {
+        body: {
+          businessId: business.id,
+          serviceId: selectedService.id,
+          clientName: clientName.trim(),
+          customerEmail: email.trim(),
+          paymentMode: businessForPayment.deposits_enabled === true ? 'auto' : 'full',
+          successUrl,
+          cancelUrl,
+        },
+      }
+    );
+
+    if (checkoutError || checkoutData?.error) {
+      setIsSubmitting(false);
+      const message = await getEdgeFunctionErrorMessage({ error: checkoutError, data: checkoutData });
+      setSubmitError(message);
+      return;
+    }
+
+    if (!checkoutData?.requiresPayment || !checkoutData?.checkoutUrl) {
+      setIsSubmitting(false);
+      setSubmitError(
+        checkoutData?.reason ||
+          'Unable to start payment. Please try again or contact the salon.'
+      );
+      return;
+    }
+
+    const pendingDraft: PendingPublicBookingDraft = {
+      client_name: clientName.trim(),
       date: selectedDate,
       time: selectedSlotTime,
-      staffName: selectedStaff?.name || null,
-    });
+      notes: notes.trim(),
+      customer_email: email.trim(),
+      customer_phone: phone.trim(),
+      staff_member_id: selectedStaff?.id || null,
+      business_id: business.id,
+      business_slug: business.slug,
+      service_id: selectedService.id,
+      booking_token: bookingToken,
+      service_name: selectedService.name,
+      staff_name: selectedStaff?.name || null,
+    };
 
-    setBookedSlots((previous) => [
-      ...previous,
-      {
-        id: `local-${Date.now()}`,
-        time: selectedSlotTime,
-        staff_member_id: selectedStaff?.id || null,
-        booking_metadata: {
-          service_duration_minutes: selectedService.duration_minutes,
-        },
-      },
-    ]);
+    savePendingPublicBookingDraft(business.slug, pendingDraft);
+
+    setIsSubmitting(false);
+    window.location.href = checkoutData.checkoutUrl;
   };
 
   if (confirmation) {
@@ -622,7 +720,11 @@ export default function BookingFlow({ business, services, servicesError }: Booki
             disabled={isSubmitting || !services.length}
             className="mt-6 w-full rounded-2xl bg-violet-600 px-5 py-4 text-base font-semibold text-white transition hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {isSubmitting ? 'Confirming...' : 'Confirm Booking'}
+            {isSubmitting
+              ? 'Processing...'
+              : isPublicBookingPaymentRequired(business)
+                ? 'Continue to Payment'
+                : 'Confirm Booking'}
           </button>
         </>
       ) : null}
