@@ -1,8 +1,26 @@
 import type { PublicBusiness } from '@/lib/types';
 import { createBrowserSupabaseClient } from '@/lib/supabase/client';
+import {
+  isPublicBookingPaymentRequired,
+  isPublicBookingStripeReady,
+  logPublicBookingPaymentDecision,
+  logPublicBookingPaymentFields,
+} from '@/lib/stripePayments';
 
 const PAYMENT_SETTINGS_COLUMNS =
   'stripe_account_id, stripe_charges_enabled, deposits_enabled, deposit_percentage, require_card_on_booking';
+
+export type VerifiedPublicBookingPaymentState =
+  | {
+      ok: true;
+      business: PublicBusiness;
+      isPaymentRequired: boolean;
+      isStripeReady: boolean;
+    }
+  | {
+      ok: false;
+      error: string;
+    };
 
 export async function fetchPublicBookingPaymentSettings(
   businessId: string
@@ -23,7 +41,7 @@ export async function fetchPublicBookingPaymentSettings(
     .single();
 
   if (error || !data) {
-    console.warn('[SALO] failed to refresh public booking payment settings', error?.message);
+    console.warn('[SALO WEB] failed to load payment settings', error?.message);
     return null;
   }
 
@@ -55,5 +73,35 @@ export function mergePublicBookingPaymentSettings(
   return {
     ...business,
     ...paymentSettings,
+  };
+}
+
+export async function verifyPublicBookingPaymentState(
+  business: PublicBusiness
+): Promise<VerifiedPublicBookingPaymentState> {
+  logPublicBookingPaymentFields(business, 'before refresh');
+
+  const freshPaymentSettings = await fetchPublicBookingPaymentSettings(business.id);
+
+  if (!freshPaymentSettings) {
+    return {
+      ok: false,
+      error: 'Unable to verify payment settings. Please refresh and try again.',
+    };
+  }
+
+  const mergedBusiness = mergePublicBookingPaymentSettings(business, freshPaymentSettings);
+  logPublicBookingPaymentFields(mergedBusiness, 'after refresh');
+
+  const isPaymentRequired = isPublicBookingPaymentRequired(mergedBusiness);
+  const isStripeReady = isPublicBookingStripeReady(mergedBusiness);
+
+  logPublicBookingPaymentDecision({ isPaymentRequired, isStripeReady });
+
+  return {
+    ok: true,
+    business: mergedBusiness,
+    isPaymentRequired,
+    isStripeReady,
   };
 }

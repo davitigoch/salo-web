@@ -7,20 +7,16 @@ import {
   generateAvailableTimeSlots,
   type ExistingBookingSlot,
 } from '@/lib/bookingSlots';
-import { getEdgeFunctionErrorMessage } from '@/lib/edgeFunctions';
-import {
-  fetchPublicBookingPaymentSettings,
-  mergePublicBookingPaymentSettings,
-} from '@/lib/publicBookingPayment';
+import { createPublicBookingCheckoutSession } from '@/lib/publicBookingApi';
 import {
   savePendingPublicBookingDraft,
   type PendingPublicBookingDraft,
 } from '@/lib/publicBookingDraft';
+import { verifyPublicBookingPaymentState } from '@/lib/publicBookingPayment';
 import { createBrowserSupabaseClient } from '@/lib/supabase/client';
 import {
   isPublicBookingPaymentRequired,
-  isPublicBookingStripeReady,
-  logPublicBookingPaymentSettings,
+  logPublicBookingPaymentFields,
 } from '@/lib/stripePayments';
 import type {
   BookingConfirmation,
@@ -79,6 +75,8 @@ export default function BookingFlow({ business, services, servicesError }: Booki
   const [submitError, setSubmitError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [confirmation, setConfirmation] = useState<BookingConfirmation | null>(null);
+  const [paymentBusiness, setPaymentBusiness] = useState<PublicBusiness>(business);
+  const [isLoadingPaymentSettings, setIsLoadingPaymentSettings] = useState(true);
 
   const selectedService = useMemo(
     () => services.find((service) => service.id === selectedServiceId) || null,
@@ -91,7 +89,33 @@ export default function BookingFlow({ business, services, servicesError }: Booki
   );
 
   useEffect(() => {
-    logPublicBookingPaymentSettings(business);
+    let isMounted = true;
+
+    async function loadPaymentSettings() {
+      setIsLoadingPaymentSettings(true);
+      logPublicBookingPaymentFields(business, 'page props');
+
+      const verified = await verifyPublicBookingPaymentState(business);
+
+      if (!isMounted) {
+        return;
+      }
+
+      if (verified.ok) {
+        setPaymentBusiness(verified.business);
+      } else {
+        setPaymentBusiness(business);
+        console.warn('[SALO WEB] payment settings verification failed on load', verified.error);
+      }
+
+      setIsLoadingPaymentSettings(false);
+    }
+
+    loadPaymentSettings();
+
+    return () => {
+      isMounted = false;
+    };
   }, [business]);
 
   useEffect(() => {
@@ -273,6 +297,21 @@ export default function BookingFlow({ business, services, servicesError }: Booki
     setIsSubmitting(true);
     setSubmitError('');
 
+    const verified = await verifyPublicBookingPaymentState(business);
+
+    if (!verified.ok) {
+      setIsSubmitting(false);
+      setSubmitError(verified.error);
+      return;
+    }
+
+    const businessForPayment = verified.business;
+    const { isPaymentRequired, isStripeReady } = verified;
+
+    if (isPaymentRequired) {
+      console.log('[SALO WEB] blocking direct insert');
+    }
+
     const bookingToken = generateSecureBookingToken();
     const payload = {
       client_name: clientName.trim(),
@@ -305,21 +344,8 @@ export default function BookingFlow({ business, services, servicesError }: Booki
       },
     };
 
-    logPublicBookingPaymentSettings(business);
-
-    const supabase = createBrowserSupabaseClient();
-    const freshPaymentSettings = await fetchPublicBookingPaymentSettings(business.id);
-    const businessForPayment = mergePublicBookingPaymentSettings(business, freshPaymentSettings);
-
-    logPublicBookingPaymentSettings(businessForPayment);
-
-    const isPaymentRequired = isPublicBookingPaymentRequired(businessForPayment);
-    const isStripeReady = isPublicBookingStripeReady(businessForPayment);
-
-    console.log('[SALO] payment required', isPaymentRequired);
-    console.log('[SALO] stripe ready', isStripeReady);
-
     if (!isPaymentRequired) {
+      const supabase = createBrowserSupabaseClient();
       const { error } = await supabase.from('bookings').insert(payload);
 
       setIsSubmitting(false);
@@ -361,59 +387,50 @@ export default function BookingFlow({ business, services, servicesError }: Booki
     const successUrl = `${origin}/book/${business.slug}/payment?status=success&session_id={CHECKOUT_SESSION_ID}`;
     const cancelUrl = `${origin}/book/${business.slug}/payment?status=cancel`;
 
-    console.log('[SALO] creating checkout session');
+    try {
+      const checkoutData = await createPublicBookingCheckoutSession({
+        businessId: business.id,
+        serviceId: selectedService.id,
+        clientName: clientName.trim(),
+        customerEmail: email.trim(),
+        paymentMode: businessForPayment.deposits_enabled === true ? 'auto' : 'full',
+        successUrl,
+        cancelUrl,
+      });
 
-    const { data: checkoutData, error: checkoutError } = await supabase.functions.invoke(
-      'create-stripe-checkout-session',
-      {
-        body: {
-          businessId: business.id,
-          serviceId: selectedService.id,
-          clientName: clientName.trim(),
-          customerEmail: email.trim(),
-          paymentMode: businessForPayment.deposits_enabled === true ? 'auto' : 'full',
-          successUrl,
-          cancelUrl,
-        },
+      if (!checkoutData?.requiresPayment || !checkoutData?.checkoutUrl) {
+        setIsSubmitting(false);
+        setSubmitError(
+          checkoutData?.reason ||
+            'Unable to start payment. Please try again or contact the salon.'
+        );
+        return;
       }
-    );
 
-    if (checkoutError || checkoutData?.error) {
+      const pendingDraft: PendingPublicBookingDraft = {
+        client_name: clientName.trim(),
+        date: selectedDate,
+        time: selectedSlotTime,
+        notes: notes.trim(),
+        customer_email: email.trim(),
+        customer_phone: phone.trim(),
+        staff_member_id: selectedStaff?.id || null,
+        business_id: business.id,
+        business_slug: business.slug,
+        service_id: selectedService.id,
+        booking_token: bookingToken,
+        service_name: selectedService.name,
+        staff_name: selectedStaff?.name || null,
+      };
+
+      savePendingPublicBookingDraft(business.slug, pendingDraft);
+
       setIsSubmitting(false);
-      const message = await getEdgeFunctionErrorMessage({ error: checkoutError, data: checkoutData });
-      setSubmitError(message);
-      return;
-    }
-
-    if (!checkoutData?.requiresPayment || !checkoutData?.checkoutUrl) {
+      window.location.href = checkoutData.checkoutUrl;
+    } catch (error) {
       setIsSubmitting(false);
-      setSubmitError(
-        checkoutData?.reason ||
-          'Unable to start payment. Please try again or contact the salon.'
-      );
-      return;
+      setSubmitError(error instanceof Error ? error.message : 'Payment init failed.');
     }
-
-    const pendingDraft: PendingPublicBookingDraft = {
-      client_name: clientName.trim(),
-      date: selectedDate,
-      time: selectedSlotTime,
-      notes: notes.trim(),
-      customer_email: email.trim(),
-      customer_phone: phone.trim(),
-      staff_member_id: selectedStaff?.id || null,
-      business_id: business.id,
-      business_slug: business.slug,
-      service_id: selectedService.id,
-      booking_token: bookingToken,
-      service_name: selectedService.name,
-      staff_name: selectedStaff?.name || null,
-    };
-
-    savePendingPublicBookingDraft(business.slug, pendingDraft);
-
-    setIsSubmitting(false);
-    window.location.href = checkoutData.checkoutUrl;
   };
 
   if (confirmation) {
@@ -717,14 +734,16 @@ export default function BookingFlow({ business, services, servicesError }: Booki
           <button
             type="button"
             onClick={onConfirmBooking}
-            disabled={isSubmitting || !services.length}
+            disabled={isSubmitting || isLoadingPaymentSettings || !services.length}
             className="mt-6 w-full rounded-2xl bg-violet-600 px-5 py-4 text-base font-semibold text-white transition hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {isSubmitting
               ? 'Processing...'
-              : isPublicBookingPaymentRequired(business)
-                ? 'Continue to Payment'
-                : 'Confirm Booking'}
+              : isLoadingPaymentSettings
+                ? 'Loading payment settings...'
+                : isPublicBookingPaymentRequired(paymentBusiness)
+                  ? 'Continue to Payment'
+                  : 'Confirm Booking'}
           </button>
         </>
       ) : null}

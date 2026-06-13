@@ -4,6 +4,8 @@ import { notFound } from 'next/navigation';
 import BookingFlow from '@/components/BookingFlow';
 import { fetchPublicBookingPage } from '@/lib/booking';
 
+export const dynamic = 'force-dynamic';
+
 type BookPageProps = {
   params: Promise<{ slug: string }>;
 };

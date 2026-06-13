@@ -3,12 +3,11 @@
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 
-import { getEdgeFunctionErrorMessage } from '@/lib/edgeFunctions';
+import { finalizePublicBookingPayment } from '@/lib/publicBookingApi';
 import {
   clearPendingPublicBookingDraft,
   loadPendingPublicBookingDraft,
 } from '@/lib/publicBookingDraft';
-import { createBrowserSupabaseClient } from '@/lib/supabase/client';
 
 type PublicBookingPaymentReturnProps = {
   slug: string;
@@ -55,44 +54,40 @@ export default function PublicBookingPaymentReturn({
         return;
       }
 
-      const supabase = createBrowserSupabaseClient();
-      const { data, error: finalizeError } = await supabase.functions.invoke(
-        'finalize-public-booking-payment',
-        {
-          body: {
-            checkoutSessionId: sessionId,
-            bookingDraft: pendingDraft,
-          },
+      try {
+        const data = await finalizePublicBookingPayment({
+          checkoutSessionId: sessionId,
+          bookingDraft: pendingDraft,
+        });
+
+        if (!isMounted) {
+          return;
         }
-      );
 
-      if (!isMounted) {
-        return;
-      }
+        clearPendingPublicBookingDraft(slug);
 
-      if (finalizeError || data?.error) {
-        const errorMessage = await getEdgeFunctionErrorMessage({ error: finalizeError, data });
-        setMessage(errorMessage);
+        const finalizedStatus = data?.bookingStatus || 'confirmed';
+        setConfirmation({
+          clientName: pendingDraft.client_name,
+          serviceName: pendingDraft.service_name || 'Service',
+          date: pendingDraft.date,
+          time: pendingDraft.time,
+          staffName: pendingDraft.staff_name || null,
+        });
+        setMessage(
+          finalizedStatus === 'pending'
+            ? 'Your appointment is pending review.'
+            : 'Your appointment is confirmed.'
+        );
+        setIsError(false);
+      } catch (error) {
+        if (!isMounted) {
+          return;
+        }
+
+        setMessage(error instanceof Error ? error.message : 'Failed to finalize booking payment.');
         setIsError(true);
-        return;
       }
-
-      clearPendingPublicBookingDraft(slug);
-
-      const finalizedStatus = data?.bookingStatus || 'confirmed';
-      setConfirmation({
-        clientName: pendingDraft.client_name,
-        serviceName: pendingDraft.service_name || 'Service',
-        date: pendingDraft.date,
-        time: pendingDraft.time,
-        staffName: pendingDraft.staff_name || null,
-      });
-      setMessage(
-        finalizedStatus === 'pending'
-          ? 'Your appointment is pending review.'
-          : 'Your appointment is confirmed.'
-      );
-      setIsError(false);
     }
 
     finalizePayment();
