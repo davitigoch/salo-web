@@ -12,7 +12,11 @@ export function isPublicBookingPaymentRequired(business: PublicBusiness | null |
 }
 
 export function isPublicBookingStripeReady(business: PublicBusiness | null | undefined) {
-  return Boolean(business?.stripe_account_id && normalizeBoolean(business?.stripe_charges_enabled));
+  return Boolean(
+    business?.stripe_account_id &&
+      normalizeBoolean(business?.stripe_charges_enabled) &&
+      normalizeBoolean(business?.stripe_card_payments_enabled)
+  );
 }
 
 export function logPublicBookingPaymentFields(
@@ -24,6 +28,8 @@ export function logPublicBookingPaymentFields(
     businessId: business?.id ?? null,
     stripe_account_id: business?.stripe_account_id ?? null,
     stripe_charges_enabled: normalizeBoolean(business?.stripe_charges_enabled),
+    stripe_card_payments_enabled: normalizeBoolean(business?.stripe_card_payments_enabled),
+    stripe_transfers_enabled: normalizeBoolean(business?.stripe_transfers_enabled),
     deposits_enabled: normalizeBoolean(business?.deposits_enabled),
     deposit_percentage: business?.deposit_percentage ?? null,
     require_card_on_booking: normalizeBoolean(business?.require_card_on_booking),

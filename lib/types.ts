@@ -8,6 +8,8 @@ export type PublicBusiness = {
   public_booking_enabled: boolean;
   stripe_account_id: string | null;
   stripe_charges_enabled: boolean;
+  stripe_card_payments_enabled: boolean;
+  stripe_transfers_enabled: boolean;
   deposits_enabled: boolean;
   deposit_percentage: number | null;
   require_card_on_booking: boolean;

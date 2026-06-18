@@ -24,6 +24,8 @@ export async function fetchPublicBookingPaymentSettings(
   PublicBusiness,
   | 'stripe_account_id'
   | 'stripe_charges_enabled'
+  | 'stripe_card_payments_enabled'
+  | 'stripe_transfers_enabled'
   | 'deposits_enabled'
   | 'deposit_percentage'
   | 'require_card_on_booking'
@@ -40,6 +42,8 @@ export async function fetchPublicBookingPaymentSettings(
     PublicBusiness,
     | 'stripe_account_id'
     | 'stripe_charges_enabled'
+    | 'stripe_card_payments_enabled'
+    | 'stripe_transfers_enabled'
     | 'deposits_enabled'
     | 'deposit_percentage'
     | 'require_card_on_booking'
@@ -59,6 +63,8 @@ export function mergePublicBookingPaymentSettings(
     PublicBusiness,
     | 'stripe_account_id'
     | 'stripe_charges_enabled'
+    | 'stripe_card_payments_enabled'
+    | 'stripe_transfers_enabled'
     | 'deposits_enabled'
     | 'deposit_percentage'
     | 'require_card_on_booking'

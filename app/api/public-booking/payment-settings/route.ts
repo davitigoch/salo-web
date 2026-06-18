@@ -16,7 +16,7 @@ export async function GET(request: Request) {
   const { data, error } = await supabase
     .from('businesses')
     .select(
-      'id, stripe_account_id, stripe_charges_enabled, deposits_enabled, deposit_percentage, require_card_on_booking'
+      'id, stripe_account_id, stripe_charges_enabled, stripe_card_payments_enabled, stripe_transfers_enabled, deposits_enabled, deposit_percentage, require_card_on_booking'
     )
     .eq('id', businessId)
     .eq('public_booking_enabled', true)
